@@ -10,6 +10,9 @@ defmodule Fibonacci do
   end
 end
 
+# def fibo(1), do: 1
+# def fibo(0), do: 0
+# def fibo(x), do: fibo(x-1) + fibo(x-2)
 
 IO.puts(Fibonacci.fibo(1))
 IO.puts(Fibonacci.fibo(0))
