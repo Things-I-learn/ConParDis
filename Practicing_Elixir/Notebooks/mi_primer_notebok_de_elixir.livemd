@@ -1,0 +1,28 @@
+# Mi primer notebok de elixir
+
+## Section
+
+```elixir
+{x,y} = {2,3}
+```
+
+Vamos hacer fibonacci con patrones y con funciones privadas
+
+```elixir
+defmodule Fibo do 
+  
+  def fibo(0) do
+    0
+  end
+
+  def fibo(1) do
+    1
+  end
+
+  def fibo(x) do
+    fibo(x-1) + fibo(x-2)
+  end
+end
+
+Fibo.fibo(10) |> IO.puts()
+```
