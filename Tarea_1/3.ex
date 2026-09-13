@@ -1,24 +1,17 @@
-defmodule Ejercicio3 do
-  def count() do
+defmodule Task3 do
 
-  end
+def count(nil), do: %{}
 
+def count(texto) do
+  texto
+  |> String.downcase()
+  |> Regex.scan(~r/[A-Za-z]+(?:'[A-Za-z]+)?|\d+/)
+  |> List.flatten()
+  |> Enum.reduce(%{}, fn palabra, conteo ->
+    Map.update(conteo, palabra, 1, fn valor ->
+      valor + 1
+    end)
+  end)
 end
 
-
-
-
-texto = " Hola mundo it's Hola 2 024"
-
-
-
-# palabras_minusculas = Enum.map(palabras, &String.downcase/1)
-
- conteo = Enum.reduce(palabras, %{}, fn palabra, conteo -> Map.update(conteo, palabra, 1, fn valor -> valor + 1 end) end
-         )
-
-
-~r/[A-Za-z]+(?:'[A-Za-z]+)?|\d|\d+/
-
-
-[\d \d+]
+end

@@ -1,6 +1,4 @@
-defmodule Ejercicio1 do
-
-  @type kind :: :equilateral | :isosceles | :scalene
+defmodule Task1 do
 
   def lados_numericos?(a, b, c) do
     is_number(a) and is_number(b) and is_number(c)
@@ -24,11 +22,6 @@ defmodule Ejercicio1 do
   def triangulo_valido?(a,b,c) do
     lados_positivos?(a,b,c) and condicion_triangulo?(a,b,c)
   end
-
-  @doc """
-  Return the kind of triangle with `a`, `b` and `c` as lengths.
-  """
-  @spec kind(number, number, number) :: {:ok, kind} | {:error, String.t()}
 
   def kind(a,b,c) do
     cond do
