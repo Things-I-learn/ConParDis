@@ -141,30 +141,118 @@ defmodule Gate.Sector do
   @spec confirm(t, Gate.API.hold_id(), integer) ::
           {:ok, t, [Gate.API.ticket()]}
           | {:error, :expired | :unknown_hold | :already_confirmed}
-  def confirm(_sector, _hold_id, _now) do
-    raise "not implemented"
+  def confirm(sector, hold_id, now) do
+    case Map.get(sector.holds, hold_id) do
+      nil ->
+        {:error, :unknown_hold}
+
+      %{state: :confirmed} ->
+        {:error, :already_confirmed}
+
+      %{state: :cancelled} ->
+        {:error, :unknown_hold}
+
+      %{state: :expired} ->
+        {:error, :expired}
+
+      hold = %{state: :held} ->
+        if now >= hold.expires_at do
+          {:error, :expired}
+        else
+          new_rows =
+            sell_hold_seats(sector.rows, hold.seats)
+
+          new_holds =
+            Map.put(
+              sector.holds,
+              hold_id,
+              %{hold | state: :confirmed}
+            )
+
+          new_sector = %{
+            sector
+            | rows: new_rows,
+              holds: new_holds
+          }
+
+          tickets =
+            Enum.map(hold.seats, fn {row_no, seat_no} ->
+              %{
+                seat_id:
+                  Gate.VenueSpec.seat_id(
+                    sector.name,
+                    row_no,
+                    seat_no
+                  ),
+                sector: sector.name,
+                price_cop: sector.price_cop,
+                hold_id: hold_id
+              }
+            end)
+
+          {:ok, new_sector, tickets}
+        end
+    end
   end
 
   @doc "Give up a hold and free its seats."
   @spec cancel(t, Gate.API.hold_id(), integer) ::
           {:ok, t} | {:error, :unknown_hold | :already_confirmed}
-  def cancel(_sector, _hold_id, _now) do
-    raise "not implemented"
+  def cancel(sector, hold_id, now) do
+    sector = expire_holds(sector, now)
+
+    case Map.get(sector.holds, hold_id) do
+      nil -> {:error, :unknown_hold}
+      %{state: :confirmed} -> {:error, :already_confirmed}
+      %{state: :cancelled} -> {:ok, sector}
+      %{state: :expired} -> {:ok, sector}
+
+      hold = %{state: :held} ->
+        new_rows = release_hold_seats(sector.rows, hold.seats)
+        new_holds = Map.put(sector.holds, hold_id, %{hold | state: :cancelled})
+        new_sector = %{sector | rows: new_rows, holds: new_holds, free: sector.free + length(hold.seats)}
+
+        {:ok, new_sector}
+    end
   end
 
   @doc "Free seats of the sector, after dropping whatever has expired."
   @spec availability(t, integer) :: {t, non_neg_integer}
-  def availability(_sector, _now) do
-    raise "not implemented"
+  def availability(sector, now) do
+    sector = expire_holds(sector, now)
+    {sector, sector.free}
   end
 
   @doc "A consistent cut of this sector, and the money made in it so far."
   @spec snapshot(t, integer) :: {t, Gate.API.snapshot()}
-  def snapshot(_sector, _now) do
-    raise "not implemented"
+  def snapshot(sector, now) do
+    sector = expire_holds(sector, now)
+
+    snapshot =
+      Enum.reduce(1..map_size(sector.rows), %{sold: [], held: [], free: [], revenue: 0}, fn row_no, acc ->
+        row = sector.rows[row_no]
+        statuses = Gate.Row.by_status(row)
+
+        sold_ids = Enum.map(statuses.sold, fn seat_no -> Gate.VenueSpec.seat_id(sector.name, row_no, seat_no) end)
+        held_ids = Enum.map(statuses.held, fn seat_no -> Gate.VenueSpec.seat_id(sector.name, row_no, seat_no) end)
+        free_ids = Enum.map(statuses.free, fn seat_no -> Gate.VenueSpec.seat_id(sector.name, row_no, seat_no) end)
+
+        %{sold: acc.sold ++ sold_ids, held: acc.held ++ held_ids, free: acc.free ++ free_ids, revenue: acc.revenue + length(sold_ids) * sector.price_cop}
+      end)
+
+    {sector, snapshot}
   end
 
+  defp sell_hold_seats(rows, seats) do
+    Enum.reduce(seats, rows, fn {row_no, seat_no}, current_rows ->
+      row = current_rows[row_no]
 
+      new_row =
+        Gate.Row.sell(row, [seat_no])
+
+      Map.put(current_rows, row_no, new_row)
+    end)
+  end
   defp release_hold_seats(rows, seats) do
     Enum.reduce(seats, rows, fn {row_no, seat_no}, current_rows ->
       row = current_rows[row_no]
