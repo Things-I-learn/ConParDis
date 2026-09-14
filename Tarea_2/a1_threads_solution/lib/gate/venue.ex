@@ -14,8 +14,8 @@ defmodule Gate.Venue do
 
   @behaviour Gate.API
 
-  # alias Gate.Sector
-  # alias Gate.Sync
+  alias Gate.Sector
+  alias Gate.Sync
 
   @impl Gate.API
   def start_venue(spec) do
