@@ -23,26 +23,38 @@ defmodule Gate.Sync do
   can slip between. How you arrange that is the assignment.
 
   """
-
+  alias Gate.Sector
   @typedoc "Whatever `Gate.Venue.start_venue/1` needs to hand back. Yours to define."
   @type venue :: term
 
   @doc "Set up whatever owns the state, and return the handle for it."
   @spec start(Gate.API.venue_spec()) :: {:ok, venue} | {:error, term}
-  def start(_spec) do
-    raise "not implemented"
+  def start(%{sectors: sector_specs, ttl_ms: ttl_ms}) do
+    sectors = Map.new(sector_specs, fn {sector_name, shape} -> {sector_name, Sector.new(sector_name, shape, ttl_ms)} end)
+
+    venue = spawn(fn -> loop(%{sectors: sectors, locks: %{}, waiters: %{}}) end)
+
+    {:ok, venue}
   end
 
   @doc "Take it all down. Calling this twice must still work."
   @spec stop(venue) :: :ok
-  def stop(_venue) do
-    raise "not implemented"
+  def stop(venue) do
+    monitor_ref = Process.monitor(venue)
+    send(venue, :stop)
+    receive do
+      {:DOWN, ^monitor_ref, :process, ^venue, _reason} -> :ok
+    end
   end
 
   @doc "Sector names of a running venue."
   @spec sectors(venue) :: [Gate.API.sector()]
-  def sectors(_venue) do
-    raise "not implemented"
+  def sectors(venue) do
+    ref = make_ref()
+    send(venue, {:sectors, self(), ref})
+    receive do
+      {^ref, sector_names} -> sector_names
+    end
   end
 
   @doc """
@@ -53,7 +65,94 @@ defmodule Gate.Sync do
   @spec update(venue, Gate.API.sector(), (Gate.Sector.t(), integer -> {result, Gate.Sector.t()})) ::
           result | {:error, :bad_sector}
         when result: term
-  def update(_venue, _sector, _fun) do
-    raise "not implemented"
+  def update(venue, sector, fun) do
+    caller = self()
+    acquire_ref = make_ref()
+
+    send(venue, {:acquire, caller, acquire_ref, sector})
+
+    receive do
+      {^acquire_ref, {:error, :bad_sector}} ->
+        {:error, :bad_sector}
+
+      {^acquire_ref, {:ok, current_sector}} ->
+        now = System.monotonic_time(:millisecond)
+        {result, new_sector} = fun.(current_sector, now)
+        release_ref = make_ref()
+
+        send(venue, {:release, caller, release_ref, sector, new_sector})
+
+        receive do
+          {^release_ref, :ok} -> result
+        end
+    end
+  end
+
+  defp give_lock_to_next(state, sector_name) do
+    queue = Map.get(state.waiters, sector_name, :queue.new())
+
+    case :queue.out(queue) do
+      {:empty, _queue} ->
+        %{state | locks: Map.delete(state.locks, sector_name), waiters: Map.delete(state.waiters, sector_name)}
+
+      {{:value, {next_caller, next_ref}}, remaining_queue} ->
+        current_sector = Map.fetch!(state.sectors, sector_name)
+        send(next_caller, {next_ref, {:ok, current_sector}})
+
+        new_waiters =
+          if :queue.is_empty(remaining_queue) do
+            Map.delete(state.waiters, sector_name)
+          else
+            Map.put(state.waiters, sector_name, remaining_queue)
+          end
+
+        %{state | locks: Map.put(state.locks, sector_name, next_caller), waiters: new_waiters}
+    end
+  end
+  defp loop(state) do
+    receive do
+      # Solicitar el mutex de un sector
+      {:acquire, caller, ref, sector_name} ->
+        cond do
+          not Map.has_key?(state.sectors, sector_name) ->
+            send(caller, {ref, {:error, :bad_sector}})
+            loop(state)
+
+          Map.has_key?(state.locks, sector_name) ->
+            queue = Map.get(state.waiters, sector_name, :queue.new())
+            new_queue = :queue.in({caller, ref}, queue)
+            new_waiters = Map.put(state.waiters, sector_name, new_queue)
+            loop(%{state | waiters: new_waiters})
+
+          true ->
+            current_sector = Map.fetch!(state.sectors, sector_name)
+            send(caller, {ref, {:ok, current_sector}})
+            new_locks = Map.put(state.locks, sector_name, caller)
+            loop(%{state | locks: new_locks})
+        end
+
+      # Liberar el mutex y guardar el nuevo estado
+      {:release, caller, ref, sector_name, new_sector} ->
+        case Map.get(state.locks, sector_name) do
+          ^caller ->
+            new_sectors = Map.put(state.sectors, sector_name, new_sector)
+            new_state = %{state | sectors: new_sectors} |> give_lock_to_next(sector_name)
+            send(caller, {ref, :ok})
+            loop(new_state)
+
+          _other ->
+            send(caller, {ref, {:error, :not_owner}})
+            loop(state)
+        end
+
+      # Consultar los nombres de los sectores
+      {:sectors, caller, ref} ->
+        sector_names = Map.keys(state.sectors)
+        send(caller, {ref, sector_names})
+        loop(state)
+
+      :stop ->
+        :ok
+    end
   end
 end
