@@ -62,17 +62,52 @@ defmodule Gate.Venue do
   end
 
   @impl Gate.API
+  def cancel(venue, {sector_name, id} = hold_id) when is_atom(sector_name) and is_integer(id) do
+    result =
+      Sync.update(venue, sector_name, fn current_sector, now ->
+        {current_sector, _available} = Sector.availability(current_sector, now)
+
+        case Sector.cancel(current_sector, hold_id, now) do
+          {:ok, new_sector} -> {:ok, new_sector}
+          {:error, reason} -> {{:error, reason}, current_sector}
+        end
+      end)
+
+    case result do
+      {:error, :bad_sector} -> {:error, :unknown_hold}
+      other -> other
+    end
+  end
+
   def cancel(_venue, _hold_id) do
-    raise "not implemented"
+    {:error, :unknown_hold}
   end
 
   @impl Gate.API
-  def availability(_venue, _sector) do
-    raise "not implemented"
+  def availability(venue, sector) do
+    Sync.update(venue, sector, fn current_sector, now ->
+      {new_sector, available} = Sector.availability(current_sector, now)
+      {available, new_sector}
+    end)
   end
 
+
   @impl Gate.API
-  def snapshot(_venue) do
-    raise "not implemented"
+  def snapshot(venue) do
+    Sync.sectors(venue)
+    |> Enum.reduce(%{sold: [], held: [], free: [], revenue: 0}, fn sector_name, acc ->
+      sector_snapshot =
+        Sync.update(venue, sector_name, fn current_sector, now ->
+          {new_sector, snapshot} = Sector.snapshot(current_sector, now)
+          {snapshot, new_sector}
+        end)
+
+      %{
+        sold: acc.sold ++ sector_snapshot.sold,
+        held: acc.held ++ sector_snapshot.held,
+        free: acc.free ++ sector_snapshot.free,
+        revenue: acc.revenue + sector_snapshot.revenue
+      }
+    end)
   end
 end
