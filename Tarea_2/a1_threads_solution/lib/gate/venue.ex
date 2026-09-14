@@ -18,23 +18,47 @@ defmodule Gate.Venue do
   # alias Gate.Sync
 
   @impl Gate.API
-  def start_venue(_spec) do
-    raise "not implemented"
+  def start_venue(spec) do
+    Sync.start(spec)
   end
 
   @impl Gate.API
-  def stop_venue(_venue) do
-    raise "not implemented"
+  def stop_venue(venue) do
+    Sync.stop(venue)
   end
 
   @impl Gate.API
-  def reserve(_venue, _sector, _qty, _mode) do
-    raise "not implemented"
+  def reserve(venue, sector, qty, mode) do
+    Sync.update(venue, sector, fn current_sector, now ->
+      {current_sector, _available} = Sector.availability(current_sector, now)
+
+      case Sector.reserve(current_sector, qty, mode, now) do
+        {:ok, new_sector, hold_id, seat_ids} -> {{:ok, hold_id, seat_ids}, new_sector}
+        {:error, reason} -> {{:error, reason}, current_sector}
+      end
+    end)
   end
 
-  @impl Gate.API
+@impl Gate.API
+  def confirm(venue, {sector_name, id} = hold_id) when is_atom(sector_name) and is_integer(id) do
+    result =
+      Sync.update(venue, sector_name, fn current_sector, now ->
+        {current_sector, _available} = Sector.availability(current_sector, now)
+
+        case Sector.confirm(current_sector, hold_id, now) do
+          {:ok, new_sector, tickets} -> {{:ok, tickets}, new_sector}
+          {:error, reason} -> {{:error, reason}, current_sector}
+        end
+      end)
+
+    case result do
+      {:error, :bad_sector} -> {:error, :unknown_hold}
+      other -> other
+    end
+  end
+
   def confirm(_venue, _hold_id) do
-    raise "not implemented"
+    {:error, :unknown_hold}
   end
 
   @impl Gate.API
